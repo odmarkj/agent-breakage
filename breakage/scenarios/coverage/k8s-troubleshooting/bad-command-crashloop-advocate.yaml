@@ -1,0 +1,63 @@
+# Container command is set to a shell that exits immediately,
+# sending the pod into CrashLoopBackOff. Distinct from the anchor
+# `env-var-missing-advocate` (which exits because of an assertion
+# on a required env var) and from `image-pull-failure-advocate`
+# (which never gets to run at all). Here the container IS pulled,
+# IS started, and exits 0 or 1 in under a second.
+#
+# Diagnostic path: kubectl get pods → CrashLoopBackOff → kubectl
+# logs --previous to see the container's stdout/stderr from the
+# previous crash. The log usually reveals whether it's a bad
+# command, a missing binary, or an intentional exit. Emily should
+# land on `application-error-uncaught-exception` — the container
+# died because the process it was asked to run exited.
+
+id: bad-command-crashloop-advocate
+plane: config
+symptom_class: container-fast-exit
+origin: k8s-docs:debug-crashloopbackoff
+difficulty: easy
+tier: coverage
+status: active
+source_tranche: k8s-troubleshooting
+
+injector:
+  type: deployment-patch
+  target:
+    ns: prod-advocate
+    deploy: advocate-api
+  # Override the command to something that exits immediately.
+  # `[]` array literal is supported by the mutation parser as of
+  # the env-var-missing fix; the scalar form here would be treated
+  # as a string, so we intentionally write the value as a JSON-ish
+  # array string that yaml parses into a list in the fixture.
+  # NOTE: the mutation parser only handles scalar RHS + `[]`/`{}`;
+  # arrays with elements aren't supported yet. Workaround: set the
+  # args field of the existing command to a nonsense value.
+  mutation: spec.template.spec.containers[0].args[0] = "--this-flag-does-not-exist-and-advocate-exits-immediately"
+
+detector:
+  fixed_when:
+    - expression: deployment.prod-advocate.advocate-api.readyReplicas == desiredReplicas
+      sustained_for_s: 30
+  regressed_when: []
+
+scorer:
+  time_budget_s: 600
+  scope:
+    - prod-advocate
+  credits:
+    detected: 0.2
+    diagnosed: 0.3
+    fixed: 0.3
+    no_regressions: 0.2
+
+ground_truth:
+  primary_category: application-error-uncaught-exception
+  # deployment-rollout-failure is an accepted near-miss: the effect
+  # of a bad command is that pods crashloop → ReplicaSet never
+  # retires old pods → rollout stalls. Both vocab descriptions
+  # textually support the pick. Emily reasoning about the effect
+  # layer gets half-credit; the cause layer gets full.
+  secondary_categories:
+    - deployment-rollout-failure

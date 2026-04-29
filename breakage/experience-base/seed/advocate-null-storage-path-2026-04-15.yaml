@@ -1,0 +1,47 @@
+# Ch 3 — First autonomous code fix. advocate-api NOT NULL constraint
+# violation in storage_path column, fixed by Emily via Claude Code
+# session that identified `storagePath: undefined as any` being passed
+# into the insert. One-line fix.
+
+scenario_id: null
+incident_id: advocate-null-storage-path-2026-04-15
+detected_at: 2026-04-15T00:00:00Z
+final_diagnosis: |
+  The insert in advocate-api passed `storagePath: undefined as any` into
+  Drizzle ORM. Drizzle translated `undefined` to SQL `DEFAULT`, which
+  violated the NOT NULL constraint on storage_path. Code bug, not a
+  cluster bug.
+primary_category: application-error-uncaught-exception
+secondary_categories: []
+confidence: 1.0
+actions_taken:
+  - tool: kubectl_logs
+    reversibility: 0.0
+    input_summary: pod/advocate-api-* in prod-advocate
+    at: 2026-04-15T00:00:10Z
+    reverted: false
+  - tool: readFile
+    reversibility: 0.0
+    input_summary: drizzle schema definition in cloned advocate repo
+    at: 2026-04-15T00:00:30Z
+    reverted: false
+  - tool: spawn_code_fix
+    reversibility: 0.3
+    input_summary: |
+      Claude Code session with constrained prompt (1-5 line fix,
+      abort otherwise). Produced one-line use of the `filePath`
+      variable already in scope.
+    at: 2026-04-15T00:02:00Z
+    reverted: false
+fix_applied: |
+  Commit `fix: provide storagePath when inserting document record
+  [emily-autofix]` — one-line change using existing filePath variable
+  instead of undefined. Pushed to main; CI rebuilt image; rolling
+  pod update picked up the fix.
+what_did_not_work: []
+time_to_diagnose_s: 90
+time_to_fix_s: 420
+side_effects_observed: []
+retrieval_consulted: []
+retrieval_used: []
+outcome: resolved

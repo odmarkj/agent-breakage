@@ -1,0 +1,57 @@
+# Required env var missing from the Deployment. Simulates a
+# manifest edit that dropped an env entry. Pod fails startup with
+# whatever error the app emits when the variable is undefined
+# (usually a KeyError, None, or ConfigError).
+#
+# Separate from secret-missing-key: here the env var itself isn't
+# referenced at all, so the symptom is "undefined variable" rather
+# than "secret key not found." Tests whether Emily looks at the
+# Deployment's env block, not just the Secret.
+
+id: env-var-missing-advocate
+plane: config
+symptom_class: app-startup-failure
+origin: synthetic:manifest-edit-dropped-env-var
+difficulty: easy
+tier: anchor
+status: active
+source_tranche: null
+
+injector:
+  type: deployment-patch
+  target:
+    ns: prod-advocate
+    deploy: advocate-api
+  # Replace the container's env block with an empty array. Assumes
+  # test fixture set up at least one required env var that the app
+  # (or its startup script) depends on.
+  mutation: spec.template.spec.containers[0].env = []
+
+detector:
+  fixed_when:
+    - expression: deployment.prod-advocate.advocate-api.readyReplicas == desiredReplicas
+      sustained_for_s: 15
+  regressed_when: []
+
+scorer:
+  time_budget_s: 600
+  scope:
+    - prod-advocate
+  credits:
+    detected: 0.2
+    diagnosed: 0.3
+    fixed: 0.3
+    no_regressions: 0.2
+
+ground_truth:
+  # Corrected 2026-04-23 to match bad-command-crashloop-advocate,
+  # which uses an identical mechanism (container exits immediately
+  # on startup due to bad config). Both scenarios' root cause is
+  # "application died" — the k8s-level symptom of stalled rollout
+  # is the effect. Ground_truth used to be deployment-rollout-failure;
+  # moved to application-error-uncaught-exception and kept the
+  # old term as a secondary so Emily's effect-layer picks still
+  # score partial credit.
+  primary_category: application-error-uncaught-exception
+  secondary_categories:
+    - deployment-rollout-failure

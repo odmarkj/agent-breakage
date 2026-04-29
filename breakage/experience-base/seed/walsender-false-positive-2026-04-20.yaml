@@ -1,0 +1,50 @@
+# Emily's triage rule over-triggered on CNPG walsender sessions,
+# treating healthy long-running streaming-replication connections as
+# stuck queries. Near-miss; no mutations took place because the
+# triage rule has been updated before any Tier-2 action was needed.
+
+scenario_id: null
+incident_id: walsender-false-positive-2026-04-20
+detected_at: 2026-04-20T00:00:00Z
+final_diagnosis: |
+  Emily's stuck-query heuristic flagged postgres walsender sessions
+  whose `state = active` and `query = START_REPLICATION SLOT ...` had
+  been running for hours. These are CNPG's internal streaming
+  replication; they're supposed to be long-lived. The triage rule
+  was duration-only and didn't exclude replication slots or the
+  `streaming_replica` role.
+primary_category: false-positive-stuck-query
+secondary_categories: []
+confidence: 1.0
+actions_taken:
+  - tool: postgres_query
+    reversibility: 0.0
+    input_summary: |
+      SELECT pid, query, state, usename, application_name,
+      now() - query_start FROM pg_stat_activity WHERE ...
+    at: 2026-04-20T00:00:30Z
+    reverted: false
+  - tool: readFile
+    reversibility: 0.0
+    input_summary: operator/src/triage/rules.ts stuck-query rule
+    at: 2026-04-20T00:01:00Z
+    reverted: false
+  - tool: spawn_code_fix
+    reversibility: 0.3
+    input_summary: |
+      Claude Code session updated the stuck-query triage rule to
+      exclude `streaming_replica` role and queries matching
+      `START_REPLICATION`.
+    at: 2026-04-20T00:03:00Z
+    reverted: false
+fix_applied: |
+  Triage rule excludes CNPG walsender sessions by role and query
+  pattern. No false positives observed after deploy.
+what_did_not_work:
+  - "Initial instinct was to terminate the 'stuck' session — would have broken replication. Caught in diagnosis phase."
+time_to_diagnose_s: 120
+time_to_fix_s: 540
+side_effects_observed: []
+retrieval_consulted: []
+retrieval_used: []
+outcome: resolved

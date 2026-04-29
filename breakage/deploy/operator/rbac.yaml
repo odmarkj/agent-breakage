@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: k3s-operator
+  namespace: operator
+---
+# ClusterRole: Emily needs cluster-scoped reads plus tier-2 mutations
+# on workloads in scenario namespaces. Secret verbs are `create, get,
+# list, watch` only (create-only per AUTONOMY.md Ch 7 Layer 3).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k3s-operator
+rules:
+  # ── Read-everything for diagnostics ────────────────────────────
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - services
+      - endpoints
+      - configmaps
+      - namespaces
+      - nodes
+      - events
+      - persistentvolumeclaims
+      - persistentvolumes
+    verbs: [get, list, watch]
+  - apiGroups: ["apps"]
+    resources: [deployments, statefulsets, replicasets, daemonsets]
+    verbs: [get, list, watch]
+  - apiGroups: ["networking.k8s.io"]
+    resources: [ingresses, networkpolicies]
+    verbs: [get, list, watch]
+  - apiGroups: ["autoscaling"]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
+  - apiGroups: ["policy"]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch]
+  - apiGroups: ["batch"]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch]
+
+  # ── Tier-2 mutations Emily can self-execute ─────────────────────
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [delete]  # for pod-restart via delete
+  - apiGroups: ["apps"]
+    resources: [deployments, statefulsets]
+    verbs: [patch, update]  # scale, rollout restart, patch (for scenario fixes)
+  - apiGroups: ["apps"]
+    resources: [deployments/scale, statefulsets/scale]
+    verbs: [patch, update]
+
+  # ── Secrets: create-only per AUTONOMY.md Ch 7 Layer 3 ───────────
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create, get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k3s-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: k3s-operator
+subjects:
+  - kind: ServiceAccount
+    name: k3s-operator
+    namespace: operator

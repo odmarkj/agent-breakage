@@ -1,0 +1,50 @@
+# Enables OTel Demo's cartFailure flag. The cart service starts
+# returning errors on EmptyCart operations, which cascades to
+# checkout. Classic "one service misbehaves, others see errors"
+# pattern Emily should triage by looking at the error source not
+# the first service whose p99 spikes.
+#
+# Expected Emily flow:
+#   1. error rate on checkout service rises
+#   2. check checkout logs → errors talking to cart
+#   3. check cart logs → intentional failure
+#   4. look at cart's config → flagd flag active
+#   5. toggle the flag off (or revert the root cause)
+
+id: otel-cart-failure
+plane: app
+symptom_class: downstream-service-errors
+origin: synthetic:otel-demo-flagd-cart-failure
+difficulty: medium
+tier: coverage
+status: active
+source_tranche: otel-demo-flagd-faults
+
+injector:
+  type: flagd-flag
+  target:
+    ns: otel-demo
+    configmap: flagd-config
+  flag: cartFailure
+  variant: "on"
+
+detector:
+  fixed_when:
+    - expression: error_rate{ns=otel-demo} < 0.005
+      sustained_for_s: 60
+  regressed_when:
+    - expression: cluster_slo_delta > 0.1 in any out-of-scope namespace
+
+scorer:
+  time_budget_s: 600
+  scope:
+    - otel-demo
+  credits:
+    detected: 0.2
+    diagnosed: 0.3
+    fixed: 0.3
+    no_regressions: 0.2
+
+ground_truth:
+  primary_category: application-error-uncaught-exception
+  secondary_categories: []

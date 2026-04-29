@@ -1,0 +1,46 @@
+# Enables OTel Demo's recommendationCacheFailure flag. The
+# recommendation service's cache fails, every request falls through
+# to the authoritative source, which quickly saturates its
+# connection pool to the product-catalog service.
+#
+# Canonical "cache miss cascade" scenario. Tests whether Emily
+# looks past the immediate "connection pool exhausted" error to
+# the actual cause (cache is down, not the downstream service).
+
+id: otel-recommendation-cache-failure
+plane: app
+symptom_class: cache-miss-cascade
+origin: synthetic:otel-demo-flagd-recommendation-cache-failure
+difficulty: hard
+tier: coverage
+status: active
+source_tranche: otel-demo-flagd-faults
+
+injector:
+  type: flagd-flag
+  target:
+    ns: otel-demo
+    configmap: flagd-config
+  flag: recommendationCacheFailure
+  variant: "on"
+
+detector:
+  fixed_when:
+    - expression: error_rate{ns=otel-demo} < 0.005
+      sustained_for_s: 60
+  regressed_when:
+    - expression: cluster_slo_delta > 0.1 in any out-of-scope namespace
+
+scorer:
+  time_budget_s: 600
+  scope:
+    - otel-demo
+  credits:
+    detected: 0.2
+    diagnosed: 0.3
+    fixed: 0.3
+    no_regressions: 0.2
+
+ground_truth:
+  primary_category: connection-pool-exhaustion
+  secondary_categories: []

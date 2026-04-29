@@ -1,0 +1,56 @@
+# publisher-reviews-v2 Phase 1 deployment blocked by proxy pool
+# provisioning failure. Root cause was a cloud-init template YAML
+# error; fixed via bridge request to orch. Documents the end-to-end
+# detect-diagnose-handoff pattern for external dependency failures.
+
+scenario_id: null
+incident_id: publisher-reviews-proxy-pool-2026-04-20
+detected_at: 2026-04-20T16:56:00Z
+final_diagnosis: |
+  publisher-reviews-v2 Phase 1 deployment required a VPS proxy pool
+  (Hetzner-backed). Proxy VMs provisioned successfully but failed to
+  come online — cloud-init user-data script produced invalid YAML at
+  runtime because variable substitution in the template escaped
+  incorrectly, so the bootstrap SSH + provisioning hooks never ran.
+  Tier escalation mechanism was working correctly — proxies stayed
+  in tier 0 (not yet escalated) because they had never reported
+  ready. The problem was upstream in the cloud-init template, not
+  in tier promotion logic.
+primary_category: cloud-init-template-yaml-error
+secondary_categories:
+  - proxy-pool-provisioning-failure
+confidence: 1.0
+actions_taken:
+  - tool: shell_exec
+    reversibility: 0.0
+    input_summary: |
+      hcloud server describe <vm-id>; fetch console output to see
+      cloud-init status
+    at: 2026-04-20T16:58:00Z
+    reverted: false
+  - tool: readFile
+    reversibility: 0.0
+    input_summary: cloud-init user-data template in orch repo
+    at: 2026-04-20T17:05:00Z
+    reverted: false
+  - tool: writeFile
+    reversibility: 0.3
+    input_summary: |
+      Bridge request to orch project to fix the cloud-init template
+      YAML escaping. Orch subagent patched the template, returned PR
+      URL. Emily waited for merge + VM image rebuild, then
+      re-provisioned proxy pool.
+    at: 2026-04-20T17:14:00Z
+    reverted: false
+fix_applied: |
+  Cloud-init template YAML escaping corrected (single-quote handling
+  in nested variable substitution). Proxy pool re-provisioned
+  successfully; publisher-reviews-v2 Phase 1 deployment unblocked.
+what_did_not_work:
+  - "Initial hypothesis that tier promotion logic was broken — diagnostic checks ruled this out quickly"
+time_to_diagnose_s: 540
+time_to_fix_s: 1260
+side_effects_observed: []
+retrieval_consulted: []
+retrieval_used: []
+outcome: resolved

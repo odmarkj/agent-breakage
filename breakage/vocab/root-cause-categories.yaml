@@ -1,0 +1,256 @@
+# Root-cause category vocabulary for Emily's postmortems and scenarios.
+#
+# ~20 medium-granularity categories. Labels optimized for human
+# comprehension at 3am (`cert-rotation-race`, not `CAT_07B`) while
+# remaining discriminating enough for scorecard diagnosis credit.
+#
+# Seeded from Emily's actual incident history (AUTONOMY.md chapters
+# and README chronological wins/losses). Grows from data: Emily may
+# propose new categories with rationale; human-reviewed proposals
+# expand this list between baseline runs.
+#
+# Multi-label from day 1. Every incident gets a primary_category
+# (required) and optional secondary_categories. Scoring: primary match
+# = 0.7 of diagnosis credit; each correct secondary = 0.1 up to 0.3.
+
+version: 3
+last_updated: 2026-04-22
+total_categories: 24
+
+categories:
+  # ── Framework-internal ─────────────────────────────────────────────
+  # Reserved for scorecard rows where the scenario run itself failed
+  # before Emily could act (injector crashed, orchestrator exception).
+  # NOT a category Emily should ever pick — the framework emits it
+  # automatically. Surfaces in scorecards so framework-side failures
+  # don't disappear silently or contaminate Emily's per-category stats.
+  - id: framework-error
+    description: |
+      The scenario run failed before Emily was given a chance to
+      diagnose — for example, the injector throw, detector crashed,
+      or the orchestrator hit an unhandled exception. Emily does not
+      pick this category; the runner emits it when it can't produce
+      a real postmortem. Filter these rows out when judging Emily's
+      performance.
+    example_incidents: []
+
+  # ── Resource / capacity ────────────────────────────────────────────
+  - id: resource-limit-misconfiguration
+    description: |
+      Container memory or CPU limit set too low for the actual working
+      set, or missing request causing misplacement. Symptoms include
+      OOMKilled, sustained throttling, or scheduler evicting pods.
+    example_incidents: []
+    example_symptoms:
+      - pod_status: OOMKilled
+      - event_pattern: FailedScheduling
+      - metric: container_memory_working_set_bytes approaches limit
+
+  - id: connection-pool-exhaustion
+    description: |
+      Database, HTTP client, or application-level connection pool
+      exhausted. Upstream requests queue, then time out. Often
+      presents as auth-failed (see `symptom-misdiagnosis`).
+    example_incidents: []
+    example_symptoms:
+      - log_pattern: "too many connections"
+      - metric: active_connections / max_connections > 0.95
+
+  # ── Secret / credential handling ───────────────────────────────────
+  - id: secret-content-mismatch
+    description: |
+      Secret's data differs from what the consumer expects. Covers
+      both cases: (a) a required key is missing from the Secret
+      entirely (e.g., `SESSION_SECRET` removed from `advocate-secrets`
+      by an incomplete `kubectl create secret | kubectl apply`),
+      and (b) the key exists but its value is wrong (e.g., rewritten
+      to authenticate as a different user, or structurally valid but
+      semantically wrong). Both failure modes surface to the pod
+      identically — an env var is undefined or holds an unexpected
+      value — and both are fixed the same way: restore the Secret
+      to its expected content. Do NOT use `secret-missing` or
+      `configuration-error` for these; this is the canonical term.
+    example_incidents:
+      - advocate-cascade-2026-04-17
+      - superuser-rotation-2026-04-20
+
+  - id: secret-missing
+    description: |
+      The referenced Secret resource does NOT EXIST at all in the
+      target namespace. Pods fail with `secret "X" not found` during
+      pod spec resolution. Use this ONLY when the Secret resource
+      itself is absent. If the Secret exists but is missing a
+      required key OR has wrong values, use `secret-content-mismatch`
+      instead.
+    example_incidents: []
+
+  - id: secret-full-replace-instead-of-patch
+    description: |
+      `kubectl create secret … --dry-run=client -o yaml | kubectl apply`
+      pattern replaces the entire Secret rather than merging one key.
+      Siblings keys silently lost. Mutation-safety SOP documents this.
+    example_incidents:
+      - advocate-cascade-2026-04-17
+
+  - id: credential-invention
+    description: |
+      Agent generates a new credential (password, token) rather than
+      reading the existing canonical source. Produces drift between
+      the live credential and the canonical Secret.
+    example_incidents:
+      - advocate-cascade-2026-04-17
+      - superuser-rotation-2026-04-20
+
+  - id: cert-rotation-race
+    description: |
+      Certificate rotates while dependent components hold stale copies,
+      or component A gets new cert before component B is restarted.
+      Mutual TLS failures, TLS handshake errors, "certificate has
+      expired" on freshly-rotated infra.
+    example_incidents: []
+
+  # ── Cross-namespace / boundary violations ──────────────────────────
+  - id: cross-namespace-reference-invalid
+    description: |
+      Kubernetes `secretKeyRef` or `configMapKeyRef` from a Deployment
+      in namespace A to a resource in namespace B. Refs are
+      namespace-scoped; the reference does not resolve.
+    example_incidents:
+      - advocate-cascade-2026-04-17
+
+  - id: cross-namespace-sql-mutation
+    description: |
+      Database write (e.g., ALTER USER) affecting resources owned by
+      namespaces other than the goal's source namespace. Cluster-wide
+      blast radius disguised as a single-namespace fix.
+    example_incidents:
+      - superuser-rotation-2026-04-20
+
+  # ── Diagnostic failures ────────────────────────────────────────────
+  - id: symptom-misdiagnosis
+    description: |
+      Agent treats a surface symptom as the root cause. Shortest path
+      from symptom to success is to mutate the symptom's named
+      subsystem, even when the real cause is unrelated. Canonical
+      example: "password auth failed" interpreted as a credential
+      problem when the actual cause is missing schema migrations.
+    example_incidents:
+      - superuser-rotation-2026-04-20
+
+  - id: false-positive-stuck-query
+    description: |
+      Long-running but healthy database session (e.g., CNPG
+      walsender, streaming replication) misread as a stuck or
+      runaway query. Triage rule over-triggers on duration alone.
+    example_incidents:
+      - walsender-false-positive-2026-04-20
+
+  # ── Dependency / schema ────────────────────────────────────────────
+  - id: dependency-mismatch
+    description: |
+      Package extras, transitive pins, or client library versions
+      mismatch with code expectations. Canonical example:
+      `procrastinate[aiopg]` pulls psycopg2 while code uses psycopg v3.
+    example_incidents:
+      - publisher-reviews-psycopg-mismatch-2026-04-20
+
+  - id: schema-migration-missing
+    description: |
+      Application code expects database schema or migration state
+      that hasn't been applied. Queries against missing tables,
+      constraint references to unknown columns, foreign-key errors
+      on bootstrap.
+    example_incidents:
+      - publisher-reviews-schema-missing-2026-04-20
+
+  # ── Application code bugs ──────────────────────────────────────────
+  - id: application-error-uncaught-exception
+    description: |
+      Runtime error in application code: null reference, type
+      mismatch, uncaught exception, ORM-level constraint violation
+      traceable to a specific code path.
+    example_incidents:
+      - advocate-null-storage-path-2026-04-15
+
+  - id: application-error-race-condition
+    description: |
+      Concurrent access to shared state without serialization.
+      Missing lock, missing transaction, read-modify-write race.
+      Canonical example: `COALESCE(MAX(sequence), 0) + 1` under
+      concurrent inserts.
+    example_incidents:
+      - eventstore-race-2026-04-17
+
+  # ── Infrastructure / platform ──────────────────────────────────────
+  - id: deployment-rollout-failure
+    description: |
+      A Deployment rollout stalls: image pull failure, readiness
+      probe never satisfies, new pods crashloop before old pods
+      retire. Excludes OOMKilled (use `resource-limit-misconfiguration`).
+    example_incidents: []
+
+  - id: dns-resolution-failure
+    description: |
+      Service name fails to resolve: CoreDNS misconfiguration, pod
+      resolv.conf pointing at wrong nameserver, cluster DNS policy
+      incorrect, FQDN typo in manifest.
+    example_incidents: []
+
+  - id: network-policy-blocking-legitimate-traffic
+    description: |
+      NetworkPolicy overly restrictive: blocks egress the pod needs,
+      blocks ingress from legitimate peers, blocks DNS to kube-dns.
+    example_incidents: []
+
+  - id: hpa-oscillation
+    description: |
+      HorizontalPodAutoscaler flaps between scale states due to
+      unstable target metric, cold-start latency masking steady-state,
+      or competing autoscalers on the same workload.
+    example_incidents: []
+
+  - id: cloud-init-template-yaml-error
+    description: |
+      VM cloud-init template produces invalid YAML at runtime due to
+      variable substitution, escaping, or indentation. VM boots but
+      user-data is not applied; downstream bootstrap fails silently.
+    example_incidents:
+      - publisher-reviews-cloud-init-2026-04-20
+
+  - id: proxy-pool-provisioning-failure
+    description: |
+      External VPS provider API failure, quota exhaustion, or tier
+      escalation blocks proxy pool from coming online. Dependent
+      services stall waiting for proxies.
+    example_incidents:
+      - publisher-reviews-proxy-pool-2026-04-20
+
+  - id: queue-backpressure
+    description: |
+      Message queue consumer can't keep up with producer rate: Kafka
+      partition lag grows, Redis/procrastinate job backlog swells,
+      upstream timeouts cascade as producers wait for ack. Often
+      surfaces as latency on synchronous paths that enqueue work.
+    example_incidents: []
+    example_symptoms:
+      - metric: kafka_consumergroup_lag > threshold
+      - metric: procrastinate_queue_length sustained growth
+      - log_pattern: "producer timeout waiting for ack"
+
+  - id: probe-misconfigured
+    description: |
+      A readiness or liveness probe is pointed at a path/port/check
+      that doesn't reflect actual service health. Symptoms split by
+      probe type:
+      - Readiness probe wrong: pods stay Running but never Ready, so
+        the Service sends them no traffic. No restart loop.
+      - Liveness probe wrong: kubelet kills the pod every probe
+        interval. Restart loop; pods churn through ReplicaSets.
+      Use this for either case; the fix is the same (correct the
+      probe spec) and the diagnostic path (compare probe config
+      against actual health endpoint) is shared. Formerly split as
+      `readiness-probe-misconfigured`.
+    example_incidents: []
+    example_symptoms:
+      - event_pattern: "Readiness probe failed"
+      - pod_state: sustained 0/N Ready despite app returning 200 OK

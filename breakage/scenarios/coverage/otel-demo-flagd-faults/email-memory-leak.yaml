@@ -1,0 +1,52 @@
+# Enables OTel Demo's emailMemoryLeak flag. The email service
+# starts retaining references to request objects, RSS grows
+# monotonically, eventually OOMs.
+#
+# Expected Emily flow: look at container memory trend; notice
+# email pod in OOMKill loop; diagnose memory leak. Fix for a
+# demo scenario is "disable the flag." For real incidents, fix
+# would be "restart pods for immediate relief + escalate to
+# owning team for code-level fix."
+
+id: otel-email-memory-leak
+plane: app
+symptom_class: memory-leak
+origin: synthetic:otel-demo-flagd-email-memory-leak
+difficulty: medium
+tier: coverage
+status: active
+source_tranche: otel-demo-flagd-faults
+
+injector:
+  type: flagd-flag
+  target:
+    ns: otel-demo
+    configmap: flagd-config
+  flag: emailMemoryLeak
+  variant: "on"
+
+detector:
+  fixed_when:
+    # Detect "fixed" by absence of container restarts on the email
+    # deployment for a sustained window. Requires Prometheus
+    # scraping kube_pod_container_status_restarts_total (standard
+    # metric from kube-state-metrics if OTel Demo bundles it;
+    # otherwise substitute with a K8s API check on pod age).
+    - expression: "promql: sum(increase(kube_pod_container_status_restarts_total{namespace=\"otel-demo\",pod=~\"email-.*\"}[2m])) == 0"
+      sustained_for_s: 120
+  regressed_when:
+    - expression: cluster_slo_delta > 0.1 in any out-of-scope namespace
+
+scorer:
+  time_budget_s: 900
+  scope:
+    - otel-demo
+  credits:
+    detected: 0.2
+    diagnosed: 0.3
+    fixed: 0.3
+    no_regressions: 0.2
+
+ground_truth:
+  primary_category: resource-limit-misconfiguration
+  secondary_categories: []

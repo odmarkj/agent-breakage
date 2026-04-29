@@ -1,0 +1,46 @@
+# Ch 4 — EventStore race. Emily's own goal_events table hit
+# duplicate-key errors under concurrent appends. Read-modify-write
+# on sequence number. She read her own source, wrote the fix.
+
+scenario_id: null
+incident_id: eventstore-race-2026-04-17
+detected_at: 2026-04-17T00:00:00Z
+final_diagnosis: |
+  `goal_events` append used `COALESCE(MAX(sequence), 0) + 1` followed
+  by an INSERT, non-atomic. Two concurrent appends for the same goal
+  could read the same MAX and collide on the unique constraint
+  `uq_goal_events_goal_sequence`. Classic read-modify-write race.
+primary_category: application-error-race-condition
+secondary_categories: []
+confidence: 1.0
+actions_taken:
+  - tool: kubectl_logs
+    reversibility: 0.0
+    input_summary: operator pod, filtered on duplicate-key error
+    at: 2026-04-17T00:00:30Z
+    reverted: false
+  - tool: readFile
+    reversibility: 0.0
+    input_summary: operator/src/lib/eventStore.ts, append function
+    at: 2026-04-17T00:01:00Z
+    reverted: false
+  - tool: spawn_code_fix
+    reversibility: 0.3
+    input_summary: |
+      Claude Code session. Wrapped INSERT in transaction, acquired
+      pg_advisory_xact_lock(hashtext(goal_id)) before MAX read.
+      Serializes appends per goal, unrelated goals unaffected.
+      8 net lines, no schema change.
+    at: 2026-04-17T00:03:00Z
+    reverted: false
+fix_applied: |
+  Commit `fix: atomize EventStore.append with advisory lock to prevent
+  duplicate sequence [emily-autofix]`. Per-goal advisory lock in a
+  single transaction. Zero constraint violations after deploy.
+what_did_not_work: []
+time_to_diagnose_s: 120
+time_to_fix_s: 600
+side_effects_observed: []
+retrieval_consulted: []
+retrieval_used: []
+outcome: resolved

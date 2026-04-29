@@ -1,0 +1,52 @@
+# Pod stuck Pending because resources.requests.cpu exceeds any
+# schedulable node's allocatable CPU. kubectl describe pod shows
+# the classic `0/N nodes are available: insufficient cpu` event.
+#
+# First-90-days k8s pattern: operators encounter this the first
+# time they set resource requests without looking at node size.
+# Fix is a one-line manifest edit once diagnosed.
+#
+# Diagnostic path: kubectl get pods → Pending → kubectl describe
+# pod → Events section spells out which resource is insufficient.
+# Emily should land on `deployment-rollout-failure` because the
+# Deployment's ReplicaSet can't materialize pods — NOT on
+# `resource-limit-misconfiguration` (that's for containers that
+# RUN with the wrong limit; here they never run).
+
+id: pod-pending-request-too-high-advocate
+plane: config
+symptom_class: scheduling-failure
+origin: k8s-docs:debug-pending-pods
+difficulty: easy
+tier: coverage
+status: active
+source_tranche: k8s-troubleshooting
+
+injector:
+  type: deployment-patch
+  target:
+    ns: prod-advocate
+    deploy: advocate-api
+  # Request 32 CPUs — no node in k3d-scenarios has that. Pods go
+  # Pending immediately; Deployment reports unavailable replicas.
+  mutation: spec.template.spec.containers[0].resources.requests.cpu = "32"
+
+detector:
+  fixed_when:
+    - expression: deployment.prod-advocate.advocate-api.readyReplicas == desiredReplicas
+      sustained_for_s: 30
+  regressed_when: []
+
+scorer:
+  time_budget_s: 600
+  scope:
+    - prod-advocate
+  credits:
+    detected: 0.2
+    diagnosed: 0.3
+    fixed: 0.3
+    no_regressions: 0.2
+
+ground_truth:
+  primary_category: deployment-rollout-failure
+  secondary_categories: []

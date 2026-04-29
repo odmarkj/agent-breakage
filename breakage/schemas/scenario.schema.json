@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://k3s-breakage/schemas/scenario.schema.json",
+  "title": "Scenario",
+  "description": "A breakage-framework scenario. See breakage/src/types/scenario.ts for the parsed TypeScript shape.",
+  "type": "object",
+  "required": [
+    "id",
+    "plane",
+    "symptom_class",
+    "origin",
+    "difficulty",
+    "tier",
+    "status",
+    "source_tranche",
+    "injector",
+    "detector",
+    "scorer",
+    "ground_truth"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Stable kebab-case identifier. Must be unique across the library."
+    },
+    "plane": {
+      "type": "string",
+      "enum": ["infra", "config", "app"]
+    },
+    "symptom_class": {
+      "type": "string",
+      "description": "Human-readable class label (e.g., resource-exhaustion, auth-failure). Informational."
+    },
+    "origin": {
+      "type": "string",
+      "description": "Traceability. Either a real incident ID (preferred) or an explicit 'synthetic:<reason>' prefix.",
+      "minLength": 1
+    },
+    "difficulty": {
+      "type": "string",
+      "enum": ["easy", "medium", "hard"]
+    },
+    "tier": {
+      "type": "string",
+      "enum": ["anchor", "coverage", "retired"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["active", "regression-watch", "stable", "retired"]
+    },
+    "source_tranche": {
+      "type": ["string", "null"],
+      "description": "For coverage-tier: SRE source (sre-book-ch22, cncf-failures, adversarial, etc.). Null for anchor and incident-derived."
+    },
+    "injector": {
+      "type": "object",
+      "oneOf": [
+        {
+          "required": ["type", "target", "mutation"],
+          "properties": {
+            "type": {"const": "deployment-patch"},
+            "target": {"$ref": "#/$defs/namespacedRef"},
+            "mutation": {"type": "string"}
+          }
+        },
+        {
+          "required": ["type", "target", "mutation"],
+          "properties": {
+            "type": {"const": "configmap-patch"},
+            "target": {"$ref": "#/$defs/namespacedRef"},
+            "mutation": {"type": "string"}
+          }
+        },
+        {
+          "required": ["type", "target", "values"],
+          "properties": {
+            "type": {"const": "secret-content"},
+            "target": {"$ref": "#/$defs/namespacedRef"},
+            "values": {
+              "type": "object",
+              "additionalProperties": {"type": "string"}
+            },
+            "restart_workloads": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["kind", "name"],
+                "properties": {
+                  "kind": {"enum": ["Deployment", "StatefulSet"]},
+                  "name": {"type": "string"}
+                }
+              }
+            }
+          }
+        },
+        {
+          "required": ["type", "target", "spec"],
+          "properties": {
+            "type": {"const": "network-policy"},
+            "target": {"$ref": "#/$defs/namespacedRef"},
+            "spec": {"type": "object"}
+          }
+        },
+        {
+          "required": ["type", "target", "percentage"],
+          "properties": {
+            "type": {"const": "pod-evict"},
+            "target": {"$ref": "#/$defs/namespacedRef"},
+            "percentage": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            }
+          }
+        },
+        {
+          "required": ["type", "target", "flag", "variant"],
+          "properties": {
+            "type": {"const": "flagd-flag"},
+            "target": {"$ref": "#/$defs/namespacedRef"},
+            "flag": {"type": "string", "minLength": 1},
+            "variant": {"type": "string", "minLength": 1},
+            "config_key": {"type": "string"}
+          }
+        }
+      ]
+    },
+    "detector": {
+      "type": "object",
+      "required": ["fixed_when", "regressed_when"],
+      "additionalProperties": false,
+      "properties": {
+        "fixed_when": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/detectorCondition"},
+          "minItems": 1
+        },
+        "regressed_when": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/detectorCondition"}
+        }
+      }
+    },
+    "scorer": {
+      "type": "object",
+      "required": ["time_budget_s", "scope", "credits"],
+      "additionalProperties": false,
+      "properties": {
+        "time_budget_s": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 7200
+        },
+        "scope": {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 1
+        },
+        "credits": {
+          "type": "object",
+          "required": ["detected", "diagnosed", "fixed", "no_regressions"],
+          "additionalProperties": false,
+          "properties": {
+            "detected": {"type": "number", "minimum": 0, "maximum": 1},
+            "diagnosed": {"type": "number", "minimum": 0, "maximum": 1},
+            "fixed": {"type": "number", "minimum": 0, "maximum": 1},
+            "no_regressions": {"type": "number", "minimum": 0, "maximum": 1}
+          }
+        }
+      }
+    },
+    "ground_truth": {
+      "type": "object",
+      "required": ["primary_category", "secondary_categories"],
+      "additionalProperties": false,
+      "properties": {
+        "primary_category": {
+          "type": "string",
+          "description": "Must be a category from breakage/vocab/root-cause-categories.yaml. Validated at load time by the runner."
+        },
+        "secondary_categories": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Empty list for single-cause scenarios. Each entry must be a category from the vocab."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "namespacedRef": {
+      "type": "object",
+      "required": ["ns"],
+      "properties": {
+        "ns": {"type": "string"}
+      },
+      "additionalProperties": {"type": "string"}
+    },
+    "detectorCondition": {
+      "type": "object",
+      "required": ["expression"],
+      "additionalProperties": false,
+      "properties": {
+        "expression": {"type": "string", "minLength": 1},
+        "sustained_for_s": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k3s-operator
+  namespace: operator
+  labels:
+    app: k3s-operator
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: k3s-operator
+  template:
+    metadata:
+      labels:
+        app: k3s-operator
+    spec:
+      serviceAccountName: k3s-operator
+      containers:
+        - name: operator
+          image: k3s-operator:scenarios
+          imagePullPolicy: Never   # locally imported; never pull
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            # Points operator at the breakage-framework HTTP
+            # endpoints running on the VM host. k3d auto-injects
+            # host.k3d.internal → VM host gateway.
+            - name: BREAKAGE_RUNNER_URL
+              value: "http://host.k3d.internal:8088"
+            - name: SYNTH_APPROVER_URL
+              value: "http://host.k3d.internal:8089"
+            - name: DATABASE_URL
+              value: "postgresql://operator_test:operator-test-changeme@host.k3d.internal:5432/operator_test"
+            - name: OPERATOR_MODEL
+              value: "claude-haiku-4-5-20251001"
+            - name: OPERATOR_MAX_TOOL_ROUNDS
+              value: "30"
+            - name: CONTEXT_DIR
+              value: "/app/context"
+            - name: OPERATOR_PLAYBOOKS_DIR
+              value: "/app/context/playbooks"
+            # Shared bge-m3 embedding service in prod k3s cluster
+            # (services/embeddings/). Reached from inside k3d-scenarios
+            # via the public Ingress. Requires the embeddings.ldex.co
+            # DNS A-record to be live; until then, set
+            # BREAKAGE_EMBEDDER=deterministic on this deployment so
+            # the agent doesn't fail on every retrieval call.
+            - name: BREAKAGE_EMBEDDING_URL
+              value: "https://embeddings.ldex.co/embeddings"
+            # Disable the production-only watchers that would fail
+            # to init without Slack/GitHub creds or external webhooks.
+            # The operator code tolerates missing env for these.
+          envFrom:
+            - secretRef:
+                name: operator-secrets
+          volumeMounts:
+            - name: context
+              mountPath: /app/context
+              readOnly: true
+            # Playbooks live at /app/context/playbooks/ — a
+            # separate ConfigMap mount so the subdirectory
+            # structure operator's playbook loader expects exists
+            # inside the container.
+            - name: playbooks
+              mountPath: /app/context/playbooks
+              readOnly: true
+            - name: data
+              mountPath: /app/data
+            - name: workspace
+              mountPath: /app/workspace
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 30
+      volumes:
+        - name: context
+          configMap:
+            name: operator-context
+        - name: playbooks
+          configMap:
+            name: operator-playbooks
+            optional: true   # no playbooks is a valid state
+        - name: data
+          emptyDir: {}
+        - name: workspace
+          emptyDir:
+            sizeLimit: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: k3s-operator
+  namespace: operator
+spec:
+  selector:
+    app: k3s-operator
+  ports:
+    - port: 80
+      targetPort: 8080

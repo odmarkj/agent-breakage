@@ -1,0 +1,51 @@
+# SRE Book ch. 22 — "Why Do Servers Fail to Serve Traffic?"
+#
+# Readiness probe configured so tight (periodSeconds=1,
+# failureThreshold=1, initialDelaySeconds=0) that pods are marked
+# NotReady on the first probe miss. Any normal startup latency —
+# JIT warmup, connection pool init, config fetch — becomes a
+# readiness failure. The Service rapidly cycles pods in and out of
+# its endpoints, and in a real system, retries hitting whichever
+# pod is "ready" at the moment would form a retry storm.
+#
+# Diagnostic trap: the pods ARE alive and the process IS running.
+# Emily has to read the probe spec to find the bug, not pod logs.
+# Looking at kubelet events vs container logs is the discriminator.
+
+id: slow-startup-retry-storm-advocate
+plane: config
+symptom_class: readiness-thrash
+origin: sre-book-ch22:why-do-servers-fail-to-serve-traffic
+difficulty: medium
+tier: coverage
+status: active
+source_tranche: sre-book-ch22-cascading
+
+injector:
+  type: deployment-patch
+  target:
+    ns: prod-advocate
+    deploy: advocate-api
+  # Tightens the readiness probe so even a 1-second startup delay
+  # trips it. Pod never stays Ready long enough to serve.
+  mutation: spec.template.spec.containers[0].readinessProbe.periodSeconds = 1
+
+detector:
+  fixed_when:
+    - expression: deployment.prod-advocate.advocate-api.readyReplicas == desiredReplicas
+      sustained_for_s: 45
+  regressed_when: []
+
+scorer:
+  time_budget_s: 600
+  scope:
+    - prod-advocate
+  credits:
+    detected: 0.2
+    diagnosed: 0.3
+    fixed: 0.3
+    no_regressions: 0.2
+
+ground_truth:
+  primary_category: probe-misconfigured
+  secondary_categories: []

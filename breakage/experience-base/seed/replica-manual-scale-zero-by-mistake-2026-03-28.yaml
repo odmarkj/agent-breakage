@@ -1,0 +1,67 @@
+# Operator scaled advocate-api replicas=0 via `kubectl scale` during
+# a maintenance window, meant to run it against a different
+# namespace. Pods terminated cleanly, no traffic for 4 minutes
+# before anyone noticed, then restored to 3. No data loss but a
+# visible outage in ingress metrics.
+#
+# Straightforward diagnosis BUT often misdiagnosed by Emily as
+# "image pull failure" or "deployment-rollout-failure caused by
+# missing resources" because the symptoms at the K8s level look
+# similar — 0 ready replicas, pods absent. Scaling back up is the
+# fix; raising limits or restoring images is not.
+
+scenario_id: null
+incident_id: replica-manual-scale-zero-by-mistake-2026-03-28
+detected_at: 2026-03-28T11:04:00Z
+final_diagnosis: |
+  advocate-api Deployment's replicas field was set to 0 at
+  2026-03-28T11:00:23 via a manual `kubectl scale deploy/advocate-api
+  -n prod-advocate --replicas=0` command. The operator had intended
+  to run this against a staging namespace and failed to verify
+  the namespace flag. Pods terminated cleanly; no scheduling
+  issues, no image problems, no config changes. The "fix" is
+  scaling replicas back to the documented baseline (3).
+
+  Distinguishing signal: kubectl describe deployment shows
+  spec.replicas=0 explicitly (not just "no available replicas"),
+  and no ReplicaSet events mention ImagePull, SchedulingFailed, or
+  CrashLoopBackOff. The pods were never unhealthy — they were
+  never asked to exist.
+primary_category: deployment-rollout-failure
+secondary_categories: []
+confidence: 1.0
+actions_taken:
+  - tool: kubectl_get
+    reversibility: 0.0
+    input_summary: get deploy — shows 0/0 desired/ready replicas
+    at: 2026-03-28T11:05:00Z
+    reverted: false
+  - tool: kubectl_describe
+    reversibility: 0.0
+    input_summary: |
+      describe deploy — spec.replicas = 0 (explicitly, not because
+      of rollout failure). ReplicaSet history shows the scale-down
+      event. No error conditions on the Deployment.
+    at: 2026-03-28T11:05:30Z
+    reverted: false
+  - tool: kubectl_scale
+    reversibility: 0.3
+    input_summary: |
+      kubectl scale deployment/advocate-api -n prod-advocate
+      --replicas=3 (restore documented baseline)
+    at: 2026-03-28T11:06:00Z
+    reverted: false
+fix_applied: |
+  kubectl scale deployment/advocate-api -n prod-advocate
+  --replicas=3. Pods came up in ~15s, ingress error-rate back to
+  baseline within 30s.
+what_did_not_work:
+  - "First instinct was to check pod status / kubectl logs, which returned 'no resources found' and was briefly confusing. The Deployment describe output was the signal, not pod logs."
+  - "Considered rollout-restart — that would have done nothing because there was nothing to restart. Only the replica count was wrong."
+  - "Considered whether the image was bad or a Secret was missing — the describe output ruled both out. No ImagePullBackOff, no FailedCreate, no env var issues."
+time_to_diagnose_s: 60
+time_to_fix_s: 60
+side_effects_observed: []
+retrieval_consulted: []
+retrieval_used: []
+outcome: resolved

@@ -1,0 +1,74 @@
+# advocate-api HPA misfire: HPA evicted replicas from 3 → 1 based on
+# a brief low-CPU reading during a quiet window (nightly backup
+# completed, normal request rate resumed). The single surviving pod
+# couldn't handle resumed load; error rate spiked to 4%. The HPA
+# then scaled back to 3 but the damage took 90s to recover.
+#
+# Distinguishing from cpu-throttling: here the *pod itself is fine*,
+# the issue is replica count being below the Service's baseline load
+# capacity. Emily often misdiagnoses this as either "resource limit
+# too low" (the surviving pod is throttled) or "deployment rollout
+# failure" (desired replicas == ready replicas but below nominal).
+# The fix is scaling replicas up to the documented minimum, not
+# adjusting limits or restarting pods.
+
+scenario_id: null
+incident_id: replica-scale-down-partial-hpa-misfire-2026-02-24
+detected_at: 2026-02-24T03:15:00Z
+final_diagnosis: |
+  The advocate-api HPA scaled the Deployment from 3 replicas down
+  to 1 during a brief low-CPU reading (nightly backup window ended,
+  request rate hadn't resumed yet). When traffic returned, the
+  single surviving pod couldn't absorb it; CPU pinned to limit,
+  request latency spiked, 4% of requests returned 5xx at the
+  ingress. HPA subsequently scaled back to 3 but took 90 seconds.
+
+  What made this tricky to diagnose: at the moment Emily looked,
+  the HPA had already recovered. `kubectl get deploy` showed 3/3
+  Ready. `kubectl get hpa` showed the current value was fine. The
+  problem was the HISTORY — a 90-second window where deploy was
+  1/1 Ready but underprovisioned. The fix was to raise the HPA's
+  minReplicas from 1 to 3 so brief quiet periods can't push
+  replica count below the Service's baseline capacity.
+primary_category: deployment-rollout-failure
+secondary_categories:
+  - hpa-oscillation
+confidence: 0.9
+actions_taken:
+  - tool: kubectl_get
+    reversibility: 0.0
+    input_summary: get deploy — 3/3 Ready NOW, issue was in a recent 90s window
+    at: 2026-02-24T03:17:00Z
+    reverted: false
+  - tool: kubectl_get
+    reversibility: 0.0
+    input_summary: get hpa — currentReplicas=3, minReplicas=1 (the bug)
+    at: 2026-02-24T03:18:00Z
+    reverted: false
+  - tool: kubectl_describe
+    reversibility: 0.0
+    input_summary: describe hpa — scale events showed 3 → 1 → 3 within 2 min
+    at: 2026-02-24T03:19:00Z
+    reverted: false
+  - tool: kubectl_apply
+    reversibility: 0.3
+    input_summary: |
+      Raise HPA.spec.minReplicas from 1 to 3 for advocate-api HPA
+      in prod-advocate. Baseline request load needs 3 pods minimum;
+      HPA may still scale higher on bursts.
+    at: 2026-02-24T03:22:00Z
+    reverted: false
+fix_applied: |
+  HPA minReplicas 1 → 3. HPA never scales below 3 now even during
+  quiet windows. Ingress 5xx rate at normal baseline (<0.1%) the
+  following night during the same backup window.
+what_did_not_work:
+  - "First look at kubectl get deploy showed 3/3 Ready and I almost closed the ticket. Would have missed the HPA misfire entirely if I hadn't checked ingress error-rate metrics."
+  - "Considered raising the container CPU limit — that was a symptom (the surviving pod was pinned at its limit) but not the cause (should never have been the single surviving pod)."
+  - "Considered rolling-restart as an immediate workaround; correctly identified that would do nothing because all 3 pods were already healthy."
+time_to_diagnose_s: 240
+time_to_fix_s: 240
+side_effects_observed: []
+retrieval_consulted: []
+retrieval_used: []
+outcome: resolved

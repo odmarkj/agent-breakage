@@ -1,0 +1,51 @@
+# Liveness probe patched to always fail. Kubelet restarts the pod
+# every probe period, ReplicaSet flaps, pods never stay Running
+# long enough to serve traffic.
+#
+# Distinct from probe-misconfigured: there, pods stay up
+# but never Ready. Here, pods get KILLED and restarted in a loop.
+# Different symptom surface, different diagnostic path.
+
+id: liveness-probe-always-fails-advocate
+plane: config
+symptom_class: pod-restart-loop
+origin: synthetic:classic-liveness-probe-flapping
+difficulty: medium
+tier: anchor
+status: active
+source_tranche: null
+
+injector:
+  type: deployment-patch
+  target:
+    ns: prod-advocate
+    deploy: advocate-api
+  # Point liveness at an unreachable path (same failure mode as
+  # readiness scenario, but against the liveness field instead).
+  mutation: spec.template.spec.containers[0].livenessProbe.httpGet.path = "/liveness-that-does-not-exist"
+
+detector:
+  fixed_when:
+    - expression: deployment.prod-advocate.advocate-api.readyReplicas == desiredReplicas
+      sustained_for_s: 30   # longer sustain — pods need to survive past liveness window
+  regressed_when: []
+
+scorer:
+  time_budget_s: 600
+  scope:
+    - prod-advocate
+  credits:
+    detected: 0.2
+    diagnosed: 0.3
+    fixed: 0.3
+    no_regressions: 0.2
+
+ground_truth:
+  primary_category: probe-misconfigured
+  # deployment-rollout-failure is an accepted near-miss: the effect
+  # of a misconfigured liveness probe IS that the rollout never
+  # succeeds (pods get killed in a loop). Emily picking the effect
+  # layer is reasonable even when the probe is the root cause. The
+  # scorer awards half-credit when she picks this category as primary.
+  secondary_categories:
+    - deployment-rollout-failure

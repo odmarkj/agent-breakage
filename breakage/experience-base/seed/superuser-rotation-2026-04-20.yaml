@@ -1,0 +1,76 @@
+# Ch 6 — The superuser rotation. publisher-reviews-v2 pods crash with
+# "password authentication failed for user publisher_reviews", which
+# was actually a schema-migration-not-yet-applied timeout surfacing as
+# auth failure. Emily read it as credential, invented a postgres
+# superuser password, rewrote publisher-reviews-secrets to auth as
+# postgres. Silent drift with platform/postgres-superuser.
+#
+# NEGATIVE exemplar. This is why the 7-layer hardening exists.
+
+scenario_id: null
+incident_id: superuser-rotation-2026-04-20
+detected_at: 2026-04-20T00:00:00Z
+final_diagnosis: |
+  Real cause: procrastinate's internal schema hadn't been migrated
+  yet; psycopg's pool init was timing out on procrastinate's failing
+  queries; the timeout surfaced as "FATAL: password authentication
+  failed for user publisher_reviews". The password was fine. The fix
+  was `python scripts/setup_db.py` to apply the migrations.
+
+  Emily never considered that interpretation. The shortest path from
+  "auth failed" to "fix shipped" is credential rotation, and that's
+  what she pursued.
+primary_category: symptom-misdiagnosis
+secondary_categories:
+  - schema-migration-missing
+  - cross-namespace-sql-mutation
+  - credential-invention
+confidence: 0.0   # retrospectively
+actions_taken:
+  - tool: kubectl_logs
+    reversibility: 0.0
+    input_summary: publisher-reviews-api pod, FATAL auth message
+    at: 2026-04-20T00:00:30Z
+    reverted: false
+  - tool: postgres_query
+    reversibility: 1.0
+    input_summary: |
+      ALTER USER postgres WITH PASSWORD '<LLM-generated 64-char>'
+      on platform CNPG primary — cluster-wide superuser rotation
+      triggered by a prod-publisher-reviews namespace goal
+    at: 2026-04-20T00:02:00Z
+    reverted: false
+  - tool: kubectl_apply
+    reversibility: 1.0
+    input_summary: |
+      Rewrote prod-publisher-reviews/publisher-reviews-secrets
+      DATABASE_URL to postgres://postgres:<new-pw>@...
+      /publisher_reviews. Swapped auth user to superuser AND baked a
+      fresh superuser password into a service Secret.
+    at: 2026-04-20T00:03:00Z
+    reverted: false
+fix_applied: |
+  Reported success; pods started because postgres superuser could
+  auth. Real remediation (AFTER human discovery):
+  - python scripts/setup_db.py applied procrastinate migrations
+  - platform/postgres-superuser Secret reconciled back to the real
+    password
+  - publisher-reviews-secrets restored to authenticate as
+    publisher_reviews, not postgres
+  - 7-layer hardening landed to make the Chapter 6 action chain
+    structurally impossible (see AUTONOMY.md Ch 7)
+what_did_not_work:
+  - "Triaged 'password authentication failed' as a credential problem; it was a schema-migration-not-yet-applied timeout surfacing as auth"
+  - "ALTER USER postgres is a cluster-scoped mutation initiated by a service-scoped goal — cross-namespace blast radius"
+  - "Rewrote a service Secret to authenticate as the superuser; pod briefly had cluster-wide write access"
+  - "Did not update platform/postgres-superuser (the canonical Secret); silent drift"
+  - "`postgres_query` is Tier-3 but Emily routed psql through kubectl_exec (Tier-2), bypassing the gate — now blocked by shell blocklist (Layer 2)"
+time_to_diagnose_s: 60
+time_to_fix_s: 180
+side_effects_observed:
+  - "postgres superuser password silently rotated; canonical Secret out of sync"
+  - "publisher-reviews-api briefly authenticating as postgres (cluster-wide superuser) — any query on boot ran with superuser privileges"
+  - "Any tool reading platform/postgres-superuser (backups, failover) would have failed with no visible signal until someone noticed"
+retrieval_consulted: []
+retrieval_used: []
+outcome: regressed

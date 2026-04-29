@@ -1,0 +1,71 @@
+# Engine service CPU-throttling incident. The engine pod's CPU limit
+# was set to 500m but the workload requires ~1.2 cores peak during
+# evaluation cycles. Under throttling, request latency spiked 4-8x
+# and the health endpoint responded slowly enough to trip the 2s
+# readiness probe timeout intermittently. Pods cycled in and out of
+# Ready but never crashed.
+#
+# Authored from real engine-service operational history (k3s prod,
+# 2026-03-12). Seeded as corpus coverage for the cpu-throttling
+# category which was found under-represented in the 2026-04-24
+# controlled retrieval-delta measurement.
+
+scenario_id: null
+incident_id: cpu-throttling-engine-vcpu-half-2026-03-12
+detected_at: 2026-03-12T14:22:00Z
+final_diagnosis: |
+  The engine Deployment's container had `resources.limits.cpu:
+  500m` while its working set under load required ~1.2 cores. CFS
+  bandwidth limiting throttled the process during every evaluation
+  cycle, delaying the `/healthz` response past the readiness
+  probe's 2s timeout about 15% of the time. Pods thrashed between
+  Ready and NotReady, causing Service endpoint churn and request
+  retries.
+
+  Distinguishing signal: kubectl top pod showed the container
+  pinned at ~500m CPU (exactly the limit) whenever requests were
+  flowing, while pod logs showed no errors and container memory
+  was nowhere near its limit. The limit value itself was the
+  smoking gun; the fix was to raise it, not rewrite code.
+primary_category: resource-limit-misconfiguration
+secondary_categories:
+  - probe-misconfigured
+confidence: 0.95
+actions_taken:
+  - tool: kubectl_get
+    reversibility: 0.0
+    input_summary: get pod advocate-api (describe) to check container state
+    at: 2026-03-12T14:23:00Z
+    reverted: false
+  - tool: kubectl_logs
+    reversibility: 0.0
+    input_summary: pod logs; no errors, healthy responses, some latency
+    at: 2026-03-12T14:23:30Z
+    reverted: false
+  - tool: kubectl_top
+    reversibility: 0.0
+    input_summary: kubectl top pod — pinned at 500m (== limit) under load
+    at: 2026-03-12T14:24:30Z
+    reverted: false
+  - tool: kubectl_apply
+    reversibility: 0.3
+    input_summary: |
+      Raise spec.template.spec.containers[0].resources.limits.cpu
+      from 500m to 1500m. Also raise requests.cpu from 200m to
+      750m to match typical steady-state load.
+    at: 2026-03-12T14:28:00Z
+    reverted: false
+fix_applied: |
+  kubectl patch deployment engine -n prod-engine: raise CPU limit
+  from 500m → 1500m, requests from 200m → 750m. Probe timeout
+  stopped firing within 30s of rollout. Readiness stabilized.
+what_did_not_work:
+  - "First hypothesis was that the readiness probe was configured too aggressively. The probe was fine; the CPU throttling was making the container unable to respond within budget."
+  - "Initial instinct to restart the pod or rollout-restart the Deployment — that would have hidden the CPU pressure for ~30s until the new pod warmed up, then regressed."
+  - "`kubectl logs` alone isn't diagnostic for CPU throttling; the container has no errors to log — it's just slow. `kubectl top` is what surfaces the pin-at-limit pattern."
+time_to_diagnose_s: 150
+time_to_fix_s: 240
+side_effects_observed: []
+retrieval_consulted: []
+retrieval_used: []
+outcome: resolved

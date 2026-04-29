@@ -1,0 +1,86 @@
+# Ch 5 — The advocate cascade. Emily misread a base64-encoded Secret
+# as empty, then pursued three escalating fixes, each grounded in the
+# original wrong premise. Wiped 7 secret keys. Loss.
+#
+# This is a NEGATIVE exemplar. Explicit outcome: regressed. Retrieval
+# should return this with its outcome label visible so Emily can use
+# it as a counterexample rather than a template.
+
+scenario_id: null
+incident_id: advocate-cascade-2026-04-17
+detected_at: 2026-04-17T00:00:00Z
+final_diagnosis: |
+  ServiceHTTP5xxSpike on advocate. Emily ran `kubectl get secret
+  advocate-secrets -o yaml`, saw base64 blobs in `data:`, did NOT
+  decode them, concluded the Secret was empty. It was never empty —
+  it contained DATABASE_URL plus API keys. From the misread premise:
+  (1) patched Deployment to cross-namespace secretKeyRef (does not
+  resolve), (2) rewrote DATABASE_URL without password (SCRAM failure),
+  (3) ran `ALTER USER advocate WITH PASSWORD '<LLM-generated>'` and
+  wrote that into advocate-secrets. Pods came up on the third
+  attempt, but the `kubectl create secret … | kubectl apply` pattern
+  replaced the whole Secret, wiping 7 other keys (ANTHROPIC_API_KEY,
+  SESSION_SECRET, SENDGRID_API_KEY, etc.) — none recoverable.
+primary_category: secret-content-mismatch
+secondary_categories:
+  - cross-namespace-reference-invalid
+  - secret-full-replace-instead-of-patch
+  - credential-invention
+confidence: 0.0   # retrospectively; Emily was 0.9 confident at each step
+actions_taken:
+  - tool: kubectl_get
+    reversibility: 0.0
+    input_summary: secret/advocate-secrets -n prod-advocate
+    at: 2026-04-17T00:00:30Z
+    reverted: false
+  - tool: kubectl_apply
+    reversibility: 1.0
+    input_summary: |
+      Deployment patch adding secretKeyRef to
+      platform/postgres-app for DATABASE_URL (cross-namespace, does
+      not resolve)
+    at: 2026-04-17T00:01:30Z
+    reverted: false
+  - tool: kubectl_apply
+    reversibility: 1.0
+    input_summary: |
+      Revert of cross-namespace ref; rewrite advocate-secrets
+      DATABASE_URL to postgres://advocate@postgres-rw/advocate with
+      no password
+    at: 2026-04-17T00:03:00Z
+    reverted: false
+  - tool: postgres_query
+    reversibility: 1.0
+    input_summary: |
+      ALTER USER advocate WITH PASSWORD '<LLM-generated 48-hex>'
+      against prod CNPG cluster
+    at: 2026-04-17T00:05:00Z
+    reverted: false
+  - tool: kubectl_apply
+    reversibility: 1.0
+    input_summary: |
+      kubectl create secret generic advocate-secrets --dry-run=client
+      -o yaml | kubectl apply -f - with only DATABASE_URL, replacing
+      the full Secret and wiping the other 7 keys
+    at: 2026-04-17T00:06:00Z
+    reverted: false
+fix_applied: |
+  Service came up with wrong credentials and a wiped Secret; humans
+  rotated all other affected credentials and restored working state.
+  This is the fix AFTER Emily's work, not BY Emily.
+what_did_not_work:
+  - "Assumed the Secret was empty without base64-decoding the data field"
+  - "Tried cross-namespace secretKeyRef (refs are namespace-scoped)"
+  - "Invented a new password via ALTER USER instead of reading the existing canonical Secret"
+  - "Used `kubectl create secret | kubectl apply` pattern to 'update' one key, which actually replaces all keys"
+time_to_diagnose_s: 30
+time_to_fix_s: 420
+side_effects_observed:
+  - "ANTHROPIC_API_KEY wiped from advocate-secrets"
+  - "SESSION_SECRET wiped from advocate-secrets"
+  - "SENDGRID_API_KEY wiped from advocate-secrets"
+  - "4 additional keys wiped; all rotated by humans after discovery"
+  - "advocate DB password silently rotated to LLM-generated value; canonical Secret out of sync"
+retrieval_consulted: []
+retrieval_used: []
+outcome: regressed

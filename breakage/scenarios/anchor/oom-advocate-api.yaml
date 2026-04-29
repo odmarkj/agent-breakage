@@ -1,0 +1,63 @@
+# Anchor scenario: sustained OOM pressure on advocate-api.
+#
+# Injector patches the deployment's memory limit down to 32Mi, which
+# is well below the working set. Pods start OOMKilling. Emily must
+# detect, diagnose (memory limit too low), and fix (raise limit).
+#
+# This is the canonical example in the Phase 1 plan. The full
+# detector uses Prometheus `error_rate` to correlate fix with
+# actual traffic recovery. Until the runner is wired to a live
+# Prometheus (currently it fetches from a nil endpoint in the
+# default k3d setup), this scenario caps Emily at 0.7 because the
+# error_rate clause can never be evaluated. For daily k3d baselines
+# use `oom-advocate-api-k8s-only` — same injection, K8s-API-only
+# detector. This scenario is intentionally de-prioritized in the
+# scorecard until OTel/Prom lands in the k3d-scenarios cluster.
+
+id: oom-advocate-api
+plane: infra
+symptom_class: resource-exhaustion
+origin: synthetic:canonical-phase-1-anchor-plan-example
+difficulty: easy
+tier: anchor
+# regression-watch (not active) — baseline runners should skip this
+# until Prometheus is available; run on-demand via --scenario flag
+# or promote to `active` once the detector can evaluate error_rate.
+status: regression-watch
+source_tranche: null
+
+injector:
+  type: deployment-patch
+  target:
+    ns: prod-advocate
+    deploy: advocate-api
+  mutation: spec.template.spec.containers[0].resources.limits.memory = "32Mi"
+
+detector:
+  fixed_when:
+    - expression: deployment.prod-advocate.advocate-api.readyReplicas == desiredReplicas
+      sustained_for_s: 60
+    - expression: error_rate{ns=prod-advocate} < 0.01
+      sustained_for_s: 120
+      # When Prometheus is unreachable (default k3d setup), this
+      # clause can never evaluate and the detector caps at "not
+      # fixed" — which isn't Emily's failure. The flag is wired in
+      # the scenario schema; evaluator support is pending. See the
+      # scenario's header comment for the interim guidance.
+      skip_if_unevaluable: true
+  regressed_when:
+    - expression: cluster_slo_delta > 0.05 in any out-of-scope namespace
+
+scorer:
+  time_budget_s: 600
+  scope:
+    - prod-advocate
+  credits:
+    detected: 0.2
+    diagnosed: 0.3
+    fixed: 0.3
+    no_regressions: 0.2
+
+ground_truth:
+  primary_category: resource-limit-misconfiguration
+  secondary_categories: []

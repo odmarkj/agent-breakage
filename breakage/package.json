@@ -1,0 +1,32 @@
+{
+  "name": "k3s-breakage",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file=../.env src/runner/index.ts",
+    "build": "esbuild src/runner/index.ts --bundle --platform=node --target=node22 --format=esm --outdir=dist --external:pg-native --external:@anthropic-ai/sdk --external:fastify --external:postgres --external:@kubernetes/client-node --external:ajv --external:yaml",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "migrate": "tsx --env-file=../.env src/experience-base/migrate.ts",
+    "seed": "tsx --env-file=../.env src/experience-base/seed-loader.ts",
+    "pitfalls": "tsx --env-file=../.env src/reports/pitfalls.ts",
+    "batch": "tsx --env-file=../.env src/scorecard/batch.ts",
+    "scorecard": "tsx --env-file=../.env src/scorecard/report.ts",
+    "synth-approver": "tsx --env-file=../.env src/synthetic-approver/index.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.80.0",
+    "@kubernetes/client-node": "^1.4.0",
+    "ajv": "^8.18.0",
+    "fastify": "^5.3.3",
+    "postgres": "^3.4.8",
+    "undici": "^8.1.0",
+    "yaml": "^2.8.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

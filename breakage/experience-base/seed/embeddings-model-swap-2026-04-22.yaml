@@ -1,0 +1,77 @@
+# Emily observed the embeddings Deployment in `platform-embeddings`
+# crash-looping during a deploy iteration (first a TEI cpu-1.5 download
+# bug, then bge-m3 OOMing during ONNX warmup). She patched the
+# Deployment's args to swap `--model-id=BAAI/bge-m3` (1024-dim) for
+# `--model-id=sentence-transformers/all-MiniLM-L6-v2` (384-dim). The
+# pod came up. The operator was paused before her change took any
+# downstream effect; the human operator reverted.
+#
+# NEGATIVE exemplar. The Deployment had a hidden consumer contract
+# that was not visible in its own manifest: the breakage DB's
+# `postmortems.embedding` column is `vector(1024)` and lde-dash's
+# chunked corpus was indexed with bge-m3 1024-dim. Switching the
+# served model would have corrupted retrieval for every consumer —
+# silently, because the HTTP contract (`POST /embeddings` returning a
+# float array) would still succeed; only the dimension would change.
+
+scenario_id: null
+incident_id: embeddings-model-swap-2026-04-22
+detected_at: 2026-04-22T18:35:00Z
+final_diagnosis: |
+  bge-m3 in ONNX on CPU OOMed during model warmup because the default
+  max_batch_tokens (16384) × 8192 token context × fp32 activations
+  exceeded the pod's 3.5Gi memory limit. Correct fix: raise the
+  memory limit to 6Gi and set `--max-batch-tokens=2048 --max-client-batch-size=8`
+  so warmup allocates less activation memory. The model identity
+  itself is a consumer-facing contract (embedding dimension flows
+  into the pgvector column spec and every indexed corpus) and is
+  NOT a parameter the operator can safely tune to resolve a pod
+  availability issue.
+primary_category: consumer-contract-violation
+secondary_categories:
+  - hidden-schema-coupling
+  - availability-over-correctness-tradeoff
+  - resource-limit-misconfiguration
+confidence: 1.0   # retrospectively
+actions_taken:
+  - tool: kubectl_get
+    reversibility: 0.0
+    input_summary: embeddings pod in CrashLoopBackOff on model warmup
+    at: 2026-04-22T18:40:00Z
+    reverted: false
+  - tool: kubectl_apply
+    reversibility: 0.3
+    input_summary: |
+      Patched platform-embeddings/embeddings Deployment args:
+      --model-id=BAAI/bge-m3 → --model-id=sentence-transformers/all-MiniLM-L6-v2.
+      Also bumped TEI image cpu-1.7 → cpu-1.8. Looped: every time
+      the human operator reverted to bge-m3, Emily re-applied MiniLM
+      on her next watcher tick. Twelve ReplicaSets in ~10 minutes.
+    at: 2026-04-22T18:42:00Z
+    reverted: true   # human-initiated scale-to-zero on k3s-operator
+fix_applied: |
+  Emily was scaled to 0 in the operator namespace. Human reapplied
+  the bge-m3 manifest with:
+  - `--max-batch-tokens=2048` (default was 16384 — too much fp32
+    activation memory for CPU ONNX at 8192 context)
+  - `--max-client-batch-size=8`, `--max-concurrent-requests=32`
+  - Memory limit 3500Mi → 6Gi, request 2Gi → 3Gi
+  - Image cpu-1.5 → cpu-1.7 (cpu-1.5 had a relative-URL download bug
+    for bge-m3)
+  Pod became Ready in ~25s on second rollout. 1024-dim verified.
+what_did_not_work:
+  - "Swapping the served model to resolve a pod availability issue — model identity is a consumer-facing contract, not a knob. Dimension change would have silently corrupted every downstream vector store."
+  - "Retrying the same manifest patch after the human reverted it — violates the N=2 revert-loop principle (plan §8). A manifest that keeps being reverted is a signal to escalate, not re-apply."
+  - "Image tag churn (cpu-1.5 → cpu-1.7 → cpu-1.8 in quick succession) without reading the first failure's root cause. cpu-1.5's `Error: Could not download model artifacts (relative URL without a base)` was diagnosable from the logs."
+  - "Treating platform-* namespaces the same as service namespaces. platform-embeddings is shared infra whose consumers (postmortem retrieval, lde-dash chunker) have contracts that are not readable from the Deployment manifest alone."
+  - "Acting on a pod that's been crash-looping for less than a minute. Model-loading pods legitimately take 30-60s on first boot; early intervention pre-empts the normal path."
+time_to_diagnose_s: 0   # Emily did not produce a diagnosis — she jumped straight to remediation
+time_to_fix_s: 600      # from first kubectl_apply to human scale-to-zero
+side_effects_observed:
+  - "Would have written 384-dim vectors into a `vector(1024)` column on next postmortem upsert → pgvector would reject or silently truncate depending on driver behavior."
+  - "lde-dash's existing indexed corpus (384-dim vs corpus's 1024-dim) → query embeddings would not find semantically similar chunks; retrieval quality collapses silently."
+  - "Cert-manager's HTTP-01 solver kept getting recreated as the deployment churned."
+  - "Cluster-wide: 12 stale ReplicaSets in the namespace within 10 minutes (etcd churn, though below noise floor)."
+retrieval_consulted: []
+retrieval_used: []
+outcome: regressed

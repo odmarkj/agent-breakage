@@ -1,0 +1,53 @@
+# K8s-only variant of oom-advocate-api. Used for end-to-end smoke
+# testing the runner without requiring Prometheus. Same injection
+# and scoring as the canonical oom-advocate-api, but detector
+# conditions rely exclusively on the K8s API (no http_server_*
+# metrics required).
+#
+# This scenario is useful for:
+#   - Runner pipeline smoke tests when OTel Demo isn't running
+#   - Iterating on the injector + detector without Prom dependency
+#
+# The full oom-advocate-api remains the canonical anchor for real
+# scoring, since its error_rate check is what correlates fix with
+# actual traffic recovery.
+
+id: oom-advocate-api-k8s-only
+plane: infra
+symptom_class: resource-exhaustion
+origin: synthetic:smoke-test-variant-of-oom-advocate-api
+difficulty: easy
+tier: anchor
+status: active
+source_tranche: null
+
+injector:
+  type: deployment-patch
+  target:
+    ns: prod-advocate
+    deploy: advocate-api
+  mutation: spec.template.spec.containers[0].resources.limits.memory = "32Mi"
+
+detector:
+  fixed_when:
+    - expression: deployment.prod-advocate.advocate-api.readyReplicas == desiredReplicas
+      sustained_for_s: 15
+  regressed_when: []
+
+scorer:
+  # 300s: real-Emily agent loops with 15-30 tool calls via Haiku
+  # sometimes run past the old 90s budget. Detector still fires
+  # quickly (readyReplicas restoration is seconds), but the capture
+  # wait needs room for Emily's write_postmortem to land.
+  time_budget_s: 600
+  scope:
+    - prod-advocate
+  credits:
+    detected: 0.2
+    diagnosed: 0.3
+    fixed: 0.3
+    no_regressions: 0.2
+
+ground_truth:
+  primary_category: resource-limit-misconfiguration
+  secondary_categories: []

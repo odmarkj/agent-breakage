@@ -1,0 +1,47 @@
+# Accidental scale-to-zero. Injector sets replicas=0 on the
+# Deployment, simulating a misapplied scale command, a bad HPA
+# minReplicas config, or a manifest revert that dropped replicas.
+#
+# Service goes fully offline — no pods, no traffic. Emily needs to
+# recognize "replicas=0 is intentional only when taking a service
+# offline; otherwise scale back up."
+
+id: replicas-zero-advocate
+plane: config
+symptom_class: service-offline
+origin: synthetic:accidental-scale-to-zero
+difficulty: easy
+tier: anchor
+status: active
+source_tranche: null
+
+injector:
+  type: deployment-patch
+  target:
+    ns: prod-advocate
+    deploy: advocate-api
+  mutation: spec.replicas = 0
+
+detector:
+  fixed_when:
+    # readyReplicas >= 1 sustained 15s (assuming desired > 0 once fixed)
+    - expression: deployment.prod-advocate.advocate-api.readyReplicas >= 1
+      sustained_for_s: 15
+    # And desired replicas must be > 0 (otherwise we're not really "fixed")
+    - expression: deployment.prod-advocate.advocate-api.desiredReplicas > 0
+      sustained_for_s: 15
+  regressed_when: []
+
+scorer:
+  time_budget_s: 600
+  scope:
+    - prod-advocate
+  credits:
+    detected: 0.2
+    diagnosed: 0.3
+    fixed: 0.3
+    no_regressions: 0.2
+
+ground_truth:
+  primary_category: deployment-rollout-failure
+  secondary_categories: []

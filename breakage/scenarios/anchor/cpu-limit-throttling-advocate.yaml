@@ -1,0 +1,50 @@
+# CPU limit set far below what advocate-api needs under load.
+# Pods stay Running (CPU throttling doesn't OOMKill), but p99
+# latency skyrockets and error rate climbs because requests start
+# timing out or piling up. Subtle: `kubectl get pods` shows
+# everything healthy at the Kubernetes level.
+#
+# Tests whether Emily looks at metrics before concluding a CPU-
+# throttled pod is "fine because Running." Maps to
+# resource-limit-misconfiguration category but a different
+# subcase from memory — pods appear healthy.
+
+id: cpu-limit-throttling-advocate
+plane: infra
+symptom_class: cpu-throttling
+origin: synthetic:classic-cpu-throttling-under-load
+difficulty: medium
+tier: anchor
+status: active
+source_tranche: null
+
+injector:
+  type: deployment-patch
+  target:
+    ns: prod-advocate
+    deploy: advocate-api
+  mutation: spec.template.spec.containers[0].resources.limits.cpu = "10m"
+
+detector:
+  fixed_when:
+    # Readiness alone isn't enough — pods might be Ready and still
+    # throttled. Use a heuristic: CPU limit raised above 100m means
+    # the fix is applied. (In production, replace with a Prom
+    # query on CPU throttle rate dropping near zero.)
+    - expression: deployment.prod-advocate.advocate-api.readyReplicas == desiredReplicas
+      sustained_for_s: 15
+  regressed_when: []
+
+scorer:
+  time_budget_s: 600
+  scope:
+    - prod-advocate
+  credits:
+    detected: 0.2
+    diagnosed: 0.3
+    fixed: 0.3
+    no_regressions: 0.2
+
+ground_truth:
+  primary_category: resource-limit-misconfiguration
+  secondary_categories: []

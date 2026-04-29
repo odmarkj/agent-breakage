@@ -1,0 +1,69 @@
+# publisher-reviews-v2 throttling under a transient RPS burst.
+# Normal load was 5-10 req/s; during a traffic spike to 60 req/s the
+# pod's 300m CPU limit became the bottleneck. Container latency went
+# from p50 120ms to p50 800ms, requests started timing out at the
+# ingress. Health endpoint itself remained fast (pre-compiled
+# response) so pods stayed Ready, which masked the issue from the
+# readiness-probe signal.
+#
+# Distinct from the engine-vcpu-half case: there the probe caught
+# the throttling. Here the probe didn't, and diagnosis required
+# reading ingress timeout metrics + correlating with kubectl top.
+
+scenario_id: null
+incident_id: cpu-throttling-publisher-reviews-rps-burst-2026-04-12
+detected_at: 2026-04-12T18:47:00Z
+final_diagnosis: |
+  publisher-reviews-v2's `resources.limits.cpu` was 300m, set when
+  the service first shipped and never re-tuned. An unexpected RPS
+  burst from the nightly listing-scrape caused the container to
+  CFS-throttle; request latency at p50 climbed from 120ms to 800ms,
+  and the ingress started returning 504s on requests that timed
+  out at the 1s upstream timeout.
+
+  The diagnostic sequence that revealed this: ingress logs showed
+  upstream-timeout errors, not upstream-connection-refused. Pods
+  were Ready the whole time. `kubectl top pod` showed CPU pinned
+  at 300m during the burst window. Raising the limit to 1500m
+  (5x the old limit) and the requests to 500m restored sub-200ms
+  p50 within the burst recovery window.
+primary_category: resource-limit-misconfiguration
+secondary_categories: []
+confidence: 0.9
+actions_taken:
+  - tool: kubectl_logs
+    reversibility: 0.0
+    input_summary: ingress logs — 504 timeouts, no connection failures
+    at: 2026-04-12T18:47:30Z
+    reverted: false
+  - tool: kubectl_get
+    reversibility: 0.0
+    input_summary: pod status — Ready the whole time, no restarts
+    at: 2026-04-12T18:48:00Z
+    reverted: false
+  - tool: kubectl_top
+    reversibility: 0.0
+    input_summary: pod CPU pinned at 300m (== limit) under burst load
+    at: 2026-04-12T18:49:00Z
+    reverted: false
+  - tool: kubectl_apply
+    reversibility: 0.3
+    input_summary: |
+      Raise CPU limit 300m → 1500m, requests 100m → 500m on
+      prod-publisher-reviews/publisher-reviews Deployment.
+    at: 2026-04-12T18:51:00Z
+    reverted: false
+fix_applied: |
+  Raised CPU limit 5x (300m → 1500m) and requests 5x. Ingress 504
+  rate dropped to 0 within 90s of rollout. Long-term follow-up was
+  to enable HPA on this Deployment so the limit is provisioning
+  for peak-per-pod and replicas scale out under load.
+what_did_not_work:
+  - "First hypothesis was an upstream DB connection pool issue because ingress reported timeouts — but DB connection metrics were normal. Wasted 2 minutes on a connect-vs-timeout distinction that pod-level CPU data made obvious."
+  - "Considered scaling replicas up instead of raising limit. That would have also worked for this specific burst but leaves the limit mis-sized for next time."
+time_to_diagnose_s: 180
+time_to_fix_s: 240
+side_effects_observed: []
+retrieval_consulted: []
+retrieval_used: []
+outcome: resolved

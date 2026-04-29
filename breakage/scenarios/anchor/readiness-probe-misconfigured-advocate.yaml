@@ -1,0 +1,46 @@
+# Readiness probe mis-configured to hit an endpoint that doesn't
+# exist. Pods are alive and serving the real endpoints but fail
+# readiness checks, so they never receive traffic. A subtle failure
+# mode because logs look healthy.
+#
+# Real-world analogue: engineer renames an API route, forgets to
+# update the probe; or the probe was copy-pasted from another
+# service with a different health-check path.
+
+id: readiness-probe-misconfigured-advocate
+plane: config
+symptom_class: readiness-failure
+origin: synthetic:classic-readiness-probe-wrong-path
+difficulty: medium
+tier: anchor
+status: active
+source_tranche: null
+
+injector:
+  type: deployment-patch
+  target:
+    ns: prod-advocate
+    deploy: advocate-api
+  # The advocate nginx stand-in responds to /, not /healthz/deep.
+  # Patching to this unreachable path makes every readiness check fail.
+  mutation: spec.template.spec.containers[0].readinessProbe.httpGet.path = "/does-not-exist-on-this-service"
+
+detector:
+  fixed_when:
+    - expression: deployment.prod-advocate.advocate-api.readyReplicas == desiredReplicas
+      sustained_for_s: 15
+  regressed_when: []
+
+scorer:
+  time_budget_s: 600
+  scope:
+    - prod-advocate
+  credits:
+    detected: 0.2
+    diagnosed: 0.3
+    fixed: 0.3
+    no_regressions: 0.2
+
+ground_truth:
+  primary_category: probe-misconfigured
+  secondary_categories: []

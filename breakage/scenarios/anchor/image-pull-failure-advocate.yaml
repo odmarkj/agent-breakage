@@ -1,0 +1,44 @@
+# Image pull failure. Injector patches the container image to a
+# nonexistent registry path, so the next ReplicaSet's pods end up in
+# ImagePullBackOff. Emily must notice the bad image, diagnose the
+# issue, and patch the image back to something valid.
+#
+# Real-world analogue: typo in a deploy manifest, wrong env in a
+# tag (staging image pushed to prod), or registry auth drift.
+
+id: image-pull-failure-advocate
+plane: config
+symptom_class: rollout-stuck
+origin: synthetic:classic-image-pull-backoff-failure-mode
+difficulty: easy
+tier: anchor
+status: active
+source_tranche: null
+
+injector:
+  type: deployment-patch
+  target:
+    ns: prod-advocate
+    deploy: advocate-api
+  mutation: spec.template.spec.containers[0].image = "ghcr.io/nonexistent-org/nonexistent-image:no-such-tag"
+
+detector:
+  fixed_when:
+    - expression: deployment.prod-advocate.advocate-api.readyReplicas == desiredReplicas
+      sustained_for_s: 15
+  regressed_when:
+    - expression: cluster_slo_delta > 0.05 in any out-of-scope namespace
+
+scorer:
+  time_budget_s: 600
+  scope:
+    - prod-advocate
+  credits:
+    detected: 0.2
+    diagnosed: 0.3
+    fixed: 0.3
+    no_regressions: 0.2
+
+ground_truth:
+  primary_category: deployment-rollout-failure
+  secondary_categories: []

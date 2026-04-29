@@ -1,0 +1,59 @@
+# SRE Book ch. 22 — "The Death Spiral"
+#
+# Injector scales advocate-api from its baseline replicas down to 1.
+# On paper this is still "serving": a pod is Running and Ready. But
+# a real system with steady inbound load would now have one pod
+# absorbing the full traffic rate of three, leading to per-pod
+# resource pressure, latency blow-up, and eventually cascading
+# failures downstream.
+#
+# Since we don't have a request generator in k3d-scenarios, the
+# detector here is deliberately loose: it only checks that Emily
+# RESTORES the desired replica count. The diagnostic trap is that
+# the one remaining pod looks healthy — pod logs are fine, readiness
+# passes, no container errors. The "problem" is in the Deployment
+# spec and the knowledge that 1 replica is below the fixture's
+# documented floor of 3.
+#
+# Category choice: deployment-rollout-failure fits because the
+# replica count doesn't match the expected topology. A future
+# production variant would correlate this with error_rate spikes
+# and move the category to "capacity-loss-cascade" (not in vocab
+# yet — candidate for vocab expansion).
+
+id: replica-loss-amplification-advocate
+plane: config
+symptom_class: capacity-loss
+origin: sre-book-ch22:the-death-spiral
+difficulty: easy
+tier: coverage
+status: active
+source_tranche: sre-book-ch22-cascading
+
+injector:
+  type: deployment-patch
+  target:
+    ns: prod-advocate
+    deploy: advocate-api
+  # Baseline fixture for advocate-api is 3 replicas; drop to 1.
+  mutation: spec.replicas = 1
+
+detector:
+  fixed_when:
+    - expression: deployment.prod-advocate.advocate-api.readyReplicas == desiredReplicas
+      sustained_for_s: 30
+  regressed_when: []
+
+scorer:
+  time_budget_s: 600
+  scope:
+    - prod-advocate
+  credits:
+    detected: 0.2
+    diagnosed: 0.3
+    fixed: 0.3
+    no_regressions: 0.2
+
+ground_truth:
+  primary_category: deployment-rollout-failure
+  secondary_categories: []

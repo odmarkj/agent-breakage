@@ -84,7 +84,7 @@ This is an initial public release at tag `v0.1.0` (squash-init from internal tag
 - The vocabulary at `breakage/vocab/root-cause-categories.yaml` has 24 categories; future expansion preserves all 24 IDs.
 - 9 active anchor scenarios + 1 regression-watch; coverage scenarios across 3 tranches.
 
-A forthcoming methodology paper (arXiv, Phase 1 Artifact 2 of the larger plan) cites this repository at a tag `paper-v1` for the reported numbers.
+The methodology paper ([arXiv:2605.23058](https://arxiv.org/abs/2605.23058), Phase 1 Artifact 2 of the larger plan) cites this repository at tag `v0.1.0` for the reported numbers.
 
 ## Contributing
 
@@ -99,12 +99,13 @@ Apache 2.0. See [`LICENSE`](LICENSE).
 
 ## Citation
 
-If you reference this work in academic or engineering publications, the canonical citation is the forthcoming arXiv paper. For now:
+If you reference this work in academic or engineering publications, cite the arXiv paper:
 
 ```
-Odmark, J. (2026). A measurement substrate for agentic Kubernetes operations:
-methodology and a case study in retrieval-compounding falsification.
-[Public repository, v0.1.0]. https://github.com/odmarkj/agent-breakage
+Odmark, J., Rubin, G., & van der Vyver, D. (2026). A measurement substrate for
+agentic Kubernetes operations: methodology and a case study in
+retrieval-compounding falsification. arXiv:2605.23058.
+https://arxiv.org/abs/2605.23058
 ```
 
 ---
